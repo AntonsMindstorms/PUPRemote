@@ -195,13 +195,19 @@ class PUPRemoteSensor(PUPRemote):
         **kwargs,  # backward compatibility
     ):
         super().__init__(max_packet_size)
-        self.connected = False
-        self.power = power  ## ?
-        self.mode_names = []  ## ?
+        self.power = power
         self.max_packet_size = max_packet_size
         self.lpup = lpf2.LPF2([], sensor_id=sensor_id, max_packet_size=max_packet_size)
         self._callback_queue = deque((), MAX_COMMAND_QUEUE_LENGTH)
         self._callback_lock = asyncio.Lock()
+        
+    def connected(self):
+        """Check if connected to a hub.
+
+        Returns:
+            True if connected to a hub, False otherwise.
+        """
+        return self.lpup.connected
 
     def add_command(
         self,
@@ -320,8 +326,8 @@ class PUPRemoteSensor(PUPRemote):
                 args = self.decode(self.commands[mode][FROM_HUB_FORMAT], pl)
                 result = self.commands[mode][CALLABLE](*args)
                 self._send_response(mode, result)
-        return self.lpup.connected
-
+        return self.connected()
+    
     def update_channel(self, mode_name: str, *argv):
         """Update values in sensor memory for hub retrieval. This method has no
         async version, as it only updates local memory. It is non blocking.
