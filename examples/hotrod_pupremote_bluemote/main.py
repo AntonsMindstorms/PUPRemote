@@ -1,5 +1,7 @@
 # Copy this to LMS-ESP32 via Viper-IDE.
-# Ensure LMS-ESP32 is flashed with MicroPython 1.27 or newer (20251228 or later) via firmware.antonsmindstorms.com.
+# Ensure LMS-ESP32 is flashed with MicroPython 1.25(!!) via firmware.antonsmindstorms.com.
+# Then in Viper-IDE, install the btbricks. Go to the tools menu (bottom left, wrench icon)
+# Click on "Install package from link" and enter "https://github.com/antonvh/btbricks"
 # Copy hotrod_rc.py to the LEGO Inventor Hub (or SPIKE hub) after flashing it with pybricks.
 # Then download the BlueMote app on your phone and connect to the ESP32 to control the HotRod car.
 
