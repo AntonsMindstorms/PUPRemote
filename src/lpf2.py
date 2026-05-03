@@ -25,6 +25,9 @@ ESP32 = const(1)
 # OpenMV RT board platform type
 # sys.implementation[2]: OpenMV IMXRT1060-MIMXRT1062DVJ6A
 OPENMVRT = const(2)
+# OpenMV AE3 board platform type
+# sys.implementation[2]: OpenMV-AE3 with AE302F80F55D5AE
+OPENMVAE3 = const(3)
 
 MAX_PKT = const(32)
 
@@ -116,6 +119,11 @@ class LPF2(object):
             if uart_n == None:
                 self.UART_N = 3
             print("OpenMV H7 defaults loaded")
+        elif "OpenMV-AE3" in implementation[2]:
+            self.BOARD = OPENMVAE3
+            if uart_n == None:
+                self.UART_N = 5
+            print("OpenMV AE3 defaults loaded")
         else:
             self.BOARD = ESP32
             try:
@@ -178,6 +186,9 @@ class LPF2(object):
         elif self.BOARD == OPENMV:
             self.rx_pin = self.pyb.Pin("P5", self.pyb.Pin.IN)
             self.tx_pin = self.pyb.Pin("P4", self.pyb.Pin.OUT_PP)
+        elif self.BOARD == OPENMVAE3:
+            self.rx_pin = machine.Pin("P3", machine.Pin.IN)
+            self.tx_pin = machine.Pin("P2", machine.Pin.OUT, machine.Pin.PULL_DOWN)
 
     def wrt_tx_pin(self, val, wait):
         # Reinit pin to deal with cable unplugging and re-plugging
@@ -198,6 +209,9 @@ class LPF2(object):
 
         elif self.BOARD == OPENMV:
             self.uart = self.pyb.UART(self.UART_N, 2400)
+            
+        elif self.BOARD == OPENMVAE3:
+            self.uart = machine.UART(self.UART_N, 2400)
 
     def fast_uart(self):
         if self.BOARD == ESP32:
@@ -214,6 +228,10 @@ class LPF2(object):
 
         elif self.BOARD == OPENMV:
             self.uart = self.pyb.UART(self.UART_N, 115200)
+
+        elif self.BOARD == OPENMVAE3:
+            self.uart = machine.UART(self.UART_N, 115200)
+            utime.sleep_ms(5)
 
     # -------- Payload definition
 
