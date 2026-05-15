@@ -9,7 +9,6 @@ __status__ = "Production"
 from pybricks.iodevices import PUPDevice
 import ustruct
 
-
 FILL = 0x10
 ZERO = 0x20
 SET = 0x30
@@ -66,14 +65,15 @@ class BluePad:
             b = ustruct.pack("8H", *vals)
             if b[0] == b[1] == b[2] == b[3] == 0:  # axes all at -128 → no gamepad
                 return (0, 0, 0, 0, 0, 0)
-            v0, v1, v2, v3 = b[0]-128, b[1]-128, b[2]-128, b[3]-128
+            v0, v1, v2, v3 = b[0] - 128, b[1] - 128, b[2] - 128, b[3] - 128
             btn, dpad = b[4], b[5]
         return (
             v0 if v0 > deadzone or v0 < -deadzone else 0,
             v1 if v1 > deadzone or v1 < -deadzone else 0,
             v2 if v2 > deadzone or v2 < -deadzone else 0,
             v3 if v3 > deadzone or v3 < -deadzone else 0,
-            btn, dpad,
+            btn,
+            dpad,
         )
 
     def btns_pressed(self, btns, nintendo=False):
@@ -219,39 +219,48 @@ class BluePad:
         self.cur_mode = 0
         return r
 
-    def servo(self, servo_nr, pos):
-        """
-        Sets Servo motor servo_nr to the specified position. Servo motors should be connected to
-        GPIO pins 21, 22, 23 and 25 for LMS-ESP32v1 and to GPIO pins 19, 20, 21 and 22 for LMS-ESP32v2
+    def servo(self, servo_nr, pos, zero_is_mid=True):
+        """Sets a servo motor to the specified position.
 
-        :param servo_nr: Servo motor counting from 0
-        :type servo_nr: byte
-        :param pos: Position of the Servo motor
-        :type: word (2 byte int)
+        Servo motors should be connected to GPIO pins 21, 22, 23 and 25 for
+        LMS-ESP32v1 and to GPIO pins 19, 20, 21 and 22 for LMS-ESP32v2.
+
+        Args:
+            servo_nr (int): Servo motor index counting from 0.
+            pos (int): Target position in degrees. Range depends on zero_is_mid:
+                -90 to 90 when zero_is_mid=True, 0 to 180 when zero_is_mid=False.
+            zero_is_mid (bool): If True, 0 maps to 90° (midpoint). Defaults to True.
         """
-        self.arr_servos[servo_nr] = pos % 181
+        offset = 90 if zero_is_mid else 0
+        self.arr_servos[servo_nr] = (pos + offset) % 181
         self.cur_mode = 1
         if self.sensor_id == 64:  # color matrix
             byte_vals = ustruct.unpack(
                 "9b", ustruct.pack("4HB", *self.arr_servos[:4], 0)
             )
-            r = self.pup.write(self.cur_mode, byte_vals)
+            self.pup.write(self.cur_mode, byte_vals)
         else:
-            r = self.pup.write(self.cur_mode, self.arr_servos)
-        return r
+            self.pup.write(self.cur_mode, self.arr_servos)
 
     def servos(self, servo_tgts, zero_is_mid=True):
+        """Sets multiple servo motors to the specified positions.
+
+        Args:
+            servo_tgts (list of int): Target positions for each servo motor.
+            zero_is_mid (bool, optional): If True, 0 maps to 90° (midpoint). Defaults to True.
+        """
         offset = 90 if zero_is_mid else 0
-        self.arr_servos = [(tgt + offset) % 181 for tgt in servo_tgts[:4]]
+        for i in range(len(servo_tgts)):
+            self.arr_servos[i] = (servo_tgts[i] + offset) % 181
         self.cur_mode = 1
         if self.sensor_id == 64:  # color matrix
             byte_vals = ustruct.unpack(
                 "9b", ustruct.pack("4HB", *self.arr_servos[:4], 0)
             )
-            r = self.pup.write(self.cur_mode, byte_vals)
+            self.pup.write(self.cur_mode, byte_vals)
         else:
-            r = self.pup.write(self.cur_mode, self.arr_servos)
-        return r
+            self.pup.write(self.cur_mode, self.arr_servos)
+
 
 
 # Simple fucntions to import as blocks
