@@ -501,52 +501,109 @@ class LPF2(object):
         )  # write Function Map
         self.write(self.buildFormat(mode[1], num, FMT | plus_8))  # write format
 
-    # -----   Start everything up
+    def _read_cmd_speed(self, timeout_ms=50):
+        """
+        Read and validate a CMD_SPEED/CMD_Baud packet from the hub.
 
-    def connect(self):
-        assert len(self.modes) > 0, "No modes (commands) defined"
-        fast_uart_hub = False
-        self.init_pins()
-        self.wrt_tx_pin(1, 5)  # Say hello!
-        self.wrt_tx_pin(0, 0)
-        for i in range(25):  # Wait for AOK
-            n = 0
-            while self.rx_pin.value() == 1:
-                utime.sleep_ms(1)
-                if n > 20:
-                    break
-                n += 1
-            if self.debug:
-                print(i, "falling after ms high:", n)
-            if i > 10 and (n > 21 or n < 16):
-                fast_uart_hub = True
-                if self.debug:
-                    print("Fast uart handshake after drops: ",n)
-                break
-            while self.rx_pin.value() == 0:
-                utime.sleep_ms(1)
-                # Wait until rise again
+        Pybricks `pbio_port_lump_sync_thread()` first sends CMD_SPEED with a
+        4-byte little-endian baud payload (115200) while the host UART is at
+        115200. This helper scans for that framed packet:
 
-        if fast_uart_hub:
-            self.fast_uart()
-            utime.sleep_ms(5)
-            self.write(b"\x04")
-        else:
-            self.slow_uart()
-            self.write(b"\x00")
+            [0x52, baud0, baud1, baud2, baud3, checksum]
+
+        The checksum is XOR over all bytes with initial value 0xFF, matching
+        LPF2/LUMP framing used elsewhere in this module.
+        """
+        deadline = utime.ticks_ms() + timeout_ms
+        buf = bytearray()
+        while utime.ticks_ms() < deadline:
+            b = self.readchar()
+            if b < 0:
+                utime.sleep_ms(1)
+                continue
+            if not buf:
+                if b == CMD_Baud:
+                    buf.append(b)
+                continue
+            buf.append(b)
+            if len(buf) == 6:
+                if self.calc_cksm(buf[:-1]) == buf[-1]:
+                    return int.from_bytes(buf[1:5], "little")
+                # Not a valid frame; keep scanning in case this byte starts a new frame.
+                buf = bytearray([buf[-1]]) if buf[-1] == CMD_Baud else bytearray()
+        return None
+
+    def _sync_fast_uart_with_host(self):
+        """
+        Attempt fast sync exactly like the host expects.
+
+        Mapping to Pybricks:
+        - Host sets UART to 115200 and sends CMD_SPEED(115200).
+        - If device replies with SYS_ACK (0x04), host keeps 115200 for sync.
+        - If no valid ACK arrives, host falls back to 2400 and scans for TYPE.
+
+        We therefore start at 115200, parse CMD_SPEED defensively, and only ACK
+        a valid 115200 request.
+        """
+        self.fast_uart()
+        requested_baud = self._read_cmd_speed()
+        if requested_baud == 115200:
+            self.write(bytes([BYTE_ACK]))
+            return True
+        return False
+
+    def _emit_sync_info_messages(self):
+        """
+        Send the LPF2 info stream in the order Pybricks parses during sync.
+
+        `pbio_port_lump_sync_thread()` aligns on TYPE, then
+        `pbio_port_lump_lump_parse_msg()` collects info commands until it sees
+        SYS_ACK from the device. The expected core stream is:
+
+            TYPE -> MODES -> SPEED/BAUD -> VERSION -> MODE INFO... -> SYS_ACK
+
+        This method sends everything up to (but not including) final SYS_ACK.
+        `connect()` sends final ACK after this stream and then waits for host ACK.
+        """
         self.write(self.setType(self.sensor_id))
-        self.write(self.defineModes())  # tell how many modes
-        self.write(self.defineBaud(115200))
+        self.write(self.defineModes())  # Tell host how many modes exist.
+        self.write(self.defineBaud(115200))  # Host switches to this after ACK.
         self.write(self.defineVers("0.1", __version__))
         num = len(self.modes) - 1
         for mode in reversed(self.modes):
+            # Small pacing delay keeps compatibility with constrained UART stacks.
             utime.sleep_ms(20)
             self.setupMode(mode, num)
             num -= 1
 
-        self.write(b"\x04")  # ACK
+    # -----   Start everything up
+
+    def connect(self):
+        assert len(self.modes) > 0, "No modes (commands) defined"
+        self.connected = False
+        self.init_pins()
+        # Keep the existing passive electrical identification behavior.
+        # This preserves the UART-class signature that gets the hub into
+        # `pbio_port_lump_sync_thread()` on the host side.
+        self.wrt_tx_pin(1, 5)
+        self.wrt_tx_pin(0, 0)
+
+        # Do not infer "fast UART" from RX pulse timing. Instead, follow the
+        # host contract directly: listen for CMD_SPEED at 115200 and ACK only
+        # when it is a valid request for 115200.
+        fast_uart_hub = self._sync_fast_uart_with_host()
+        if not fast_uart_hub:
+            # If host doesn't complete fast speed sync, it falls back to 2400 and
+            # looks for TYPE in the incoming stream. Match that flow directly.
+            self.slow_uart()
+
+        # Stream device identity/info for host parser to consume.
+        self._emit_sync_info_messages()
+
+        # End of sync info phase for host parser.
+        self.write(bytes([BYTE_ACK]))
         end = utime.ticks_ms() + 2500
-        while utime.ticks_ms() < end:  # Wait for ack
+        while utime.ticks_ms() < end:  # Wait for host ACK.
             data = self.readchar()
             if data == BYTE_ACK:
                 self.connected = True
@@ -556,8 +613,8 @@ class LPF2(object):
             self.last_nack = utime.ticks_ms()
             print("\nSuccessfully connected to hub with sensor id {}".format(self.sensor_id))
             if not fast_uart_hub:
+                # Host switches to advertised CMD_SPEED after ACK exchange.
                 self.fast_uart()
         else:
             print("\nFailed to connect to hub")
-
 
