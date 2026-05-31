@@ -74,6 +74,7 @@ DISCRETE = const(4)  # DIS (Discrete [0, 1, 2, 3])
 STRUCT_FMT = ("B", "H", "I", "f")
 
 HEARTBEAT_PERIOD = const(1000)  # time of inactivity after which we reset sensor
+FAST_SYNC_TIMEOUT_MS = const(400)
 
 
 def __num_bits(x):
@@ -501,7 +502,7 @@ class LPF2(object):
         )  # write Function Map
         self.write(self.buildFormat(mode[1], num, FMT | plus_8))  # write format
 
-    def _read_cmd_speed(self, timeout_ms=50):
+    def _read_cmd_speed(self, timeout_ms=FAST_SYNC_TIMEOUT_MS):
         """
         Read and validate a CMD_SPEED/CMD_Baud packet from the hub.
 
@@ -546,7 +547,9 @@ class LPF2(object):
         a valid 115200 request.
         """
         self.fast_uart()
-        requested_baud = self._read_cmd_speed()
+        # Give UART reconfiguration a brief moment before sampling bytes.
+        utime.sleep_ms(5)
+        requested_baud = self._read_cmd_speed(timeout_ms=FAST_SYNC_TIMEOUT_MS)
         if requested_baud == 115200:
             self.write(bytes([BYTE_ACK]))
             return True
@@ -617,4 +620,3 @@ class LPF2(object):
                 self.fast_uart()
         else:
             print("\nFailed to connect to hub")
-
