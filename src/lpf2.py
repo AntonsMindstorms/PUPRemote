@@ -509,7 +509,8 @@ class LPF2(object):
         self.init_pins()
         self.wrt_tx_pin(1, 5)  # Say hello!
         self.wrt_tx_pin(0, 0)
-        for i in range(25):  # Wait for AOK
+        start = utime.ticks_ms()
+        for i in range(24):  # Wait for AOK
             n = 0
             while self.rx_pin.value() == 1:
                 utime.sleep_ms(1)
@@ -521,19 +522,25 @@ class LPF2(object):
             if i > 10 and (n > 21 or n < 16):
                 fast_uart_hub = True
                 if self.debug:
-                    print("Fast uart handshake after drops: ",n)
+                    print("Fast uart handshake after drops: ", i)
                 break
             while self.rx_pin.value() == 0:
                 utime.sleep_ms(1)
                 # Wait until rise again
-
+        sync_elapsed = utime.ticks_ms()-start
+        if self.debug:
+            print("Sync negotiation took", sync_elapsed)
         if fast_uart_hub:
             self.fast_uart()
-            utime.sleep_ms(5)
+            utime.sleep_ms(6)
             self.write(b"\x04")
         else:
+            
+            if self.debug:
+                print("Slow uart sync")
             self.slow_uart()
-            self.write(b"\x00")
+            utime.sleep_ms( 450-sync_elapsed )
+            # self.write(b"\x00")
         self.write(self.setType(self.sensor_id))
         self.write(self.defineModes())  # tell how many modes
         self.write(self.defineBaud(115200))
