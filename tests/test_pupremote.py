@@ -229,6 +229,89 @@ class TestImportCompatibility(unittest.TestCase):
         self.assertTrue(hasattr(pupremote_hub, "PUPRemote"))
 
 
+def joy():
+    joy.called = True
+    return 10, 20, 30
+
+
+joy.called = False
+
+
+class TestSensorProcess(unittest.TestCase):
+    """Test PUPRemoteSensor.process() callback invocation."""
+
+    def setUp(self):
+        import pupremote
+
+        self.pupremote = pupremote
+        joy.called = False
+
+        self.mock_lpup = MagicMock()
+        self.mock_lpup.modes = []
+        self.mock_lpup.mode = MagicMock(return_value=MagicMock())
+        self.mock_lpup.heartbeat.return_value = None
+        self.mock_lpup.current_mode = 0
+        self.mock_lpup.connected = True
+
+        sys.modules["lpf2"].LPF2 = MagicMock(return_value=self.mock_lpup)
+        pupremote.lpf2 = sys.modules["lpf2"]
+
+        from collections import deque
+        import asyncio
+        import struct
+
+        pupremote.deque = deque
+        pupremote.asyncio = asyncio
+        pupremote.struct = struct
+
+        self.sensor = pupremote.PUPRemoteSensor()
+
+    def _add_callback(self, mode_name, to_hub_fmt="", from_hub_fmt="", callback=None):
+        self.pupremote.PUPRemote.add_command(
+            self.sensor, mode_name, to_hub_fmt=to_hub_fmt, from_hub_fmt=from_hub_fmt
+        )
+        if callback is not None:
+            self.sensor.commands[-1][self.pupremote.CALLABLE] = callback
+
+    def test_to_hub_only_callback_invoked_without_hub_data(self):
+        """Sensor-to-hub commands must run when the hub reads without writing."""
+        self._add_callback("joy", to_hub_fmt="BBB", callback=joy)
+        self.sensor.process()
+
+        self.assertTrue(joy.called)
+        self.mock_lpup.send_payload.assert_called_once()
+        payload = self.mock_lpup.send_payload.call_args[0][0]
+        self.assertEqual(payload, bytes([10, 20, 30]))
+
+    def test_hub_to_sensor_callback_still_works_with_data(self):
+        """Commands with from_hub_fmt must still run when the hub sends data."""
+        def echo(a, b):
+            echo.result = (a, b)
+            return a + b
+
+        echo.result = None
+        self._add_callback("echo", from_hub_fmt="BB", to_hub_fmt="B", callback=echo)
+
+        self.mock_lpup.heartbeat.return_value = (bytes([3, 4]), 0)
+        self.sensor.process()
+
+        self.assertEqual(echo.result, (3, 4))
+        self.mock_lpup.send_payload.assert_called_once()
+        self.assertEqual(self.mock_lpup.send_payload.call_args[0][0], bytes([7]))
+
+    def test_channel_sends_stored_payload_without_hub_data(self):
+        """Channels must push stored data when the hub polls without writing."""
+        self.pupremote.PUPRemote.add_command(
+            self.sensor, "value", to_hub_fmt="B", command_type=self.pupremote.CHANNEL
+        )
+        self.sensor.update_channel("value", 42)
+        self.mock_lpup.send_payload.reset_mock()
+
+        self.sensor.process()
+
+        self.mock_lpup.send_payload.assert_called_once_with()
+
+
 class TestExampleIntegration(unittest.TestCase):
     """Test that examples follow correct patterns."""
 

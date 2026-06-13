@@ -319,13 +319,36 @@ class PUPRemoteSensor(PUPRemote):
             True if connected to the hub, False otherwise.
         """
         data = self.lpup.heartbeat()
+
+        # heartbeat() returns (payload, mode) when the hub writes data to us.
+        # When the hub only polls or reads (e.g. pup.call('joy') with to_hub_fmt
+        # only), it returns None — use the active LPF2 mode in that case.
         if data is not None:
             pl, mode = data
-            if CALLABLE in self.commands[mode]:
-                result = None
+        else:
+            mode = self.lpup.current_mode
+
+        if CALLABLE in self.commands[mode]:
+            result = None
+            if data is not None:
+                # Hub-to-sensor command: decode args from hub and call callback.
                 args = self.decode(self.commands[mode][FROM_HUB_FORMAT], pl)
                 result = self.commands[mode][CALLABLE](*args)
+            else:
+                # Sensor-to-hub command: hub read without writing. We must still
+                # invoke the callback to produce fresh data (see issue #51).
+                # TypeError: callback expects hub args but none were sent.
+                try:
+                    result = self.commands[mode][CALLABLE]()
+                except TypeError:
+                    pass
+            # Skip send when callback failed; allow None for void commands.
+            if result is not None or self.commands[mode][ARGS_TO_HUB] <= 0:
                 self._send_response(mode, result)
+        elif data is None:
+            # Channel (no callback): push data stored via update_channel().
+            self.lpup.send_payload()
+
         return self.connected()
     
     def update_channel(self, mode_name: str, *argv):
