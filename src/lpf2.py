@@ -2,7 +2,7 @@
 __author__ = "Anton Vanhoucke & Ste7an"
 __copyright__ = "Copyright 2023, 2024 AntonsMindstorms.com"
 __license__ = "GPL"
-__version__ = "1.5"
+__version__ = "1.9"
 __status__ = "Production"
 
 import machine
@@ -300,7 +300,8 @@ class LPF2(object):
     # ----- comm stuff
 
     def flush(self):
-        return self.uart.read(self.uart.any())
+        if hasattr(self, "uart") and self.uart and self.uart.any():
+            return self.uart.read(self.uart.any())
 
     @staticmethod
     def str_b(b):
@@ -309,7 +310,7 @@ class LPF2(object):
     def readchar(self):
         if self.uart.any():
             c = self.uart.read(1)
-        else: # Try again once
+        else:  # Try again once
             utime.sleep_ms(1)
             if self.uart.any():
                 c = self.uart.read(1)
@@ -472,7 +473,12 @@ class LPF2(object):
 
     def defineModes(self):
         n_modes = len(self.modes) - 1
-        n_views = [m[7] for m in self.modes].count(True) - 1
+        n_view_modes = sum(1 for m in self.modes if m[7])
+        if n_view_modes:
+            n_views = n_view_modes - 1
+        else:
+            n_views = n_modes
+        n_views = max(0, n_views)
         return self.addChksm(
             bytearray(
                 [
@@ -503,8 +509,29 @@ class LPF2(object):
 
     # -----   Start everything up
 
+    def _send_info_sequence(self):
+        self.write(self.setType(self.sensor_id))
+        self.write(self.defineModes())
+        self.write(self.defineBaud(115200))
+        self.write(self.defineVers("0.1", __version__))
+        num = len(self.modes) - 1
+        for mode in reversed(self.modes):
+            utime.sleep_ms(20)
+            self.setupMode(mode, num)
+            num -= 1
+        self.write(b"\x04")
+
+    def _wait_hub_ack(self, timeout_ms=2500):
+        end = utime.ticks_ms() + timeout_ms
+        while utime.ticks_ms() < end:
+            if self.readchar() == BYTE_ACK:
+                self.connected = True
+                return True
+        return False
+
     def connect(self):
         assert len(self.modes) > 0, "No modes (commands) defined"
+        self.connected = False
         fast_uart_hub = False
         self.init_pins()
         self.wrt_tx_pin(1, 5)  # Say hello!
@@ -519,7 +546,9 @@ class LPF2(object):
                 n += 1
             if self.debug:
                 print(i, "falling after ms high:", n)
-            if i > 10 and (n > 21 or n < 16):
+            # Only n > 21: Pybricks 4 DCM uses uniform ~15-16ms pulses; n < 16
+            # false-triggers fast path (official SPIKE uses longer pulses → slow path).
+            if i > 10 and n > 21:
                 fast_uart_hub = True
                 if self.debug:
                     print("Fast uart handshake after drops: ", i)
@@ -527,7 +556,7 @@ class LPF2(object):
             while self.rx_pin.value() == 0:
                 utime.sleep_ms(1)
                 # Wait until rise again
-        sync_elapsed = utime.ticks_ms()-start
+        sync_elapsed = utime.ticks_ms() - start
         if self.debug:
             print("Sync negotiation took", sync_elapsed)
         if fast_uart_hub:
@@ -535,36 +564,30 @@ class LPF2(object):
             utime.sleep_ms(6)
             self.write(b"\x04")
         else:
-            
             if self.debug:
                 print("Slow uart sync")
             self.slow_uart()
-            utime.sleep_ms( 450-sync_elapsed )
-            # self.write(b"\x00")
-        self.write(self.setType(self.sensor_id))
-        self.write(self.defineModes())  # tell how many modes
-        self.write(self.defineBaud(115200))
-        self.write(self.defineVers("0.1", __version__))
-        num = len(self.modes) - 1
-        for mode in reversed(self.modes):
-            utime.sleep_ms(20)
-            self.setupMode(mode, num)
-            num -= 1
-
-        self.write(b"\x04")  # ACK
-        end = utime.ticks_ms() + 2500
-        while utime.ticks_ms() < end:  # Wait for ack
-            data = self.readchar()
-            if data == BYTE_ACK:
-                self.connected = True
-                break
+            utime.sleep_ms(450 - sync_elapsed)
+        self._send_info_sequence()
+        if not self._wait_hub_ack() and fast_uart_hub:
+            if self.debug:
+                print("Fast path failed, retry slow uart")
+            self.connected = False
+            self.slow_uart()
+            utime.sleep_ms(100)
+            self._send_info_sequence()
+            fast_uart_hub = False
+            self._wait_hub_ack()
 
         if self.connected:
             self.last_nack = utime.ticks_ms()
-            print("\nSuccessfully connected to hub with sensor id {}".format(self.sensor_id))
+            print(
+                "\nSuccessfully connected to hub with sensor id {}".format(
+                    self.sensor_id
+                )
+            )
             if not fast_uart_hub:
                 self.fast_uart()
         else:
             print("\nFailed to connect to hub")
-
 
