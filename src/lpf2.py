@@ -2,7 +2,7 @@
 __author__ = "Anton Vanhoucke & Ste7an"
 __copyright__ = "Copyright 2023, 2024 AntonsMindstorms.com"
 __license__ = "GPL"
-__version__ = "1.5"
+__version__ = "2.1"
 __status__ = "Production"
 
 import machine
@@ -74,6 +74,9 @@ DISCRETE = const(4)  # DIS (Discrete [0, 1, 2, 3])
 STRUCT_FMT = ("B", "H", "I", "f")
 
 HEARTBEAT_PERIOD = const(1000)  # time of inactivity after which we reset sensor
+MODE_GAP_MS = const(20)  # delay between mode info blocks at 2400 during connect
+CONNECT_DCM_MS = const(450)  # total GPIO DCM window before registration
+CONNECT_ACK_MS = const(2500)
 
 
 def __num_bits(x):
@@ -104,6 +107,7 @@ class LPF2(object):
         self.last_nack = 0
         self.debug = debug
         self.max_packet_size = max_packet_size
+        self._debug_connect = False
         self.UART_N = uart_n
         self.TX_PIN_N = tx
         self.RX_PIN_N = rx
@@ -203,13 +207,10 @@ class LPF2(object):
                 rx=self.RX_PIN_N,
                 tx=self.TX_PIN_N,
             )
-
         elif self.BOARD == OPENMVRT:
             self.uart = machine.UART(self.UART_N, 2400)
-
         elif self.BOARD == OPENMV:
             self.uart = self.pyb.UART(self.UART_N, 2400)
-            
         elif self.BOARD == OPENMVAE3:
             self.uart = machine.UART(self.UART_N, 2400)
 
@@ -221,14 +222,11 @@ class LPF2(object):
                 rx=self.RX_PIN_N,
                 tx=self.TX_PIN_N,
             )
-
         elif self.BOARD == OPENMVRT:
             self.uart = machine.UART(self.UART_N, 115200)
             utime.sleep_ms(5)
-
         elif self.BOARD == OPENMV:
             self.uart = self.pyb.UART(self.UART_N, 115200)
-
         elif self.BOARD == OPENMVAE3:
             self.uart = machine.UART(self.UART_N, 115200)
             utime.sleep_ms(5)
@@ -300,27 +298,102 @@ class LPF2(object):
     # ----- comm stuff
 
     def flush(self):
-        return self.uart.read(self.uart.any())
+        if hasattr(self, "uart") and self.uart and self.uart.any():
+            return self.uart.read(self.uart.any())
 
     @staticmethod
-    def str_b(b):
-        return " ".join([hex(c) for c in b])
+    def _byte_label(b):
+        if b == 0x00:
+            return "SYNC"
+        if b == BYTE_NACK:
+            return "NACK"
+        if b == BYTE_ACK:
+            return "ACK"
+        if b == CMD_Baud:
+            return "CMD_SPEED"
+        if b == 0xF0:
+            return "0xF0?"
+        return hex(b)
 
-    def readchar(self):
+    @staticmethod
+    def _info_type_label(info_type):
+        base = info_type & ~MSG_INFO_PLUS8
+        plus = "+8" if info_type & MSG_INFO_PLUS8 else ""
+        labels = {
+            NAME: "NAME",
+            RAW: "RAW",
+            PCT: "PCT",
+            SI: "SI",
+            SYM: "SYM",
+            FUNCTION_MAP: "MAP",
+            FMT: "FMT",
+        }
+        return labels.get(base, hex(base)) + plus
+
+    @staticmethod
+    def _info_detail(array):
+        if len(array) < 3:
+            return ""
+        info_type = array[1] & ~MSG_INFO_PLUS8
+        if info_type in (NAME, SYM):
+            s = bytes(array[2:-1]).split(b"\x00")[0]
+            try:
+                return '"{}"'.format(s.decode())
+            except UnicodeError:
+                return LPF2.str_b(s)
+        if info_type in (RAW, PCT, SI) and len(array) >= 10:
+            mn, mx = struct.unpack("<ff", bytes(array[2:10]))
+            return "[{}, {}]".format(mn, mx)
+        if info_type == FUNCTION_MAP and len(array) >= 5:
+            return "in={} out={}".format(array[2], array[3])
+        if info_type == FMT and len(array) >= 7:
+            return "sz={} type={} fmt={}.{}".format(
+                array[2], array[3], array[4], array[5]
+            )
+        return ""
+
+    @staticmethod
+    def _tx_label(array):
+        if not array:
+            return "empty"
+        if len(array) == 1:
+            if array[0] == 0x00:
+                return "SYNC"
+            if array[0] == BYTE_ACK:
+                return "ACK"
+        if array[0] == CMD_Type and len(array) >= 2:
+            return "CMD_TYPE id={}".format(array[1])
+        if array[0] == (CMD_MODES | LEN_4):
+            return "CMD_MODES"
+        if array[0] == CMD_Baud:
+            return "CMD_SPEED"
+        if array[0] == CMD_Vers:
+            return "CMD_VERSION"
+        if array[0] & 0xC0 == MSG_INFO and len(array) >= 2:
+            mode = array[0] & 7
+            if array[1] & MSG_INFO_PLUS8:
+                mode += 8
+            kind = LPF2._info_type_label(array[1])
+            detail = LPF2._info_detail(array)
+            if detail:
+                return "MSG_INFO mode={} {} {}".format(mode, kind, detail)
+            return "MSG_INFO mode={} {}".format(mode, kind)
+        return "msg"
+
+    def readchar(self, wait_ms=1):
         if self.uart.any():
             c = self.uart.read(1)
-        else: # Try again once
-            utime.sleep_ms(1)
+        elif wait_ms:
+            utime.sleep_ms(wait_ms)
             if self.uart.any():
                 c = self.uart.read(1)
             else:
                 return -1
+        else:
+            return -1
         if c == None:
             return -1
-        else:
-            if self.debug:
-                print(f"\033[91m {self.str_b(c)}\033[0m", end=" ")
-            return ord(c)
+        return ord(c)
 
     def heartbeat(self):
         if not self.connected:
@@ -328,57 +401,48 @@ class LPF2(object):
             self.connect()
             return
 
-        if (utime.ticks_ms() - self.last_nack) > HEARTBEAT_PERIOD:
+        if utime.ticks_diff(utime.ticks_ms(), self.last_nack) > HEARTBEAT_PERIOD:
             print("Checking heartbeat, but line is dead. Re-initializing.")
             self.connected = False
             self.connect()
             return
 
-        b = self.readchar()  # Read in any heartbeat or command bytes
-        if b > 0:  # There is data, let's see what it is.
+        b = self.readchar(0)
+        if b > 0:
             if b == BYTE_NACK:
-                # Regular heartbeat pulse from the hub.
-                self.last_nack = utime.ticks_ms()  # reset heartbeat timer
-                # Resend latest data, just in case
+                self.last_nack = utime.ticks_ms()
                 self.send_payload()
 
             elif b == CMD_Select:
-                self.last_nack = utime.ticks_ms()  # reset heartbeat timer
-                # The hub is asking us to change mode.
-                mode = self.readchar()
-                cksm = self.readchar()
-                # Calculate the checksum for two bytes.
+                self.last_nack = utime.ticks_ms()
+                mode = self.readchar(1)
+                cksm = self.readchar(1)
                 if cksm == 0xFF ^ CMD_Select ^ mode:
                     self.current_mode = mode
                     self.send_payload()
                     if self.debug:
-                        print(f"Mode switched to {mode}")
+                        print("mode switch:", mode)
 
             elif b == CMD_EXT_MODE:
-                self.last_nack = utime.ticks_ms()  # reset heartbeat timer
-                ext_mode = self.readchar()  # 0x00 or 0x08
-                cksm = self.readchar()  # 0xb9 or 0xb1
+                self.last_nack = utime.ticks_ms()
+                ext_mode = self.readchar(1)
+                cksm = self.readchar(1)
 
                 if cksm == 0xFF ^ CMD_EXT_MODE ^ ext_mode:
-                    b = self.readchar()  # CMD_Data | LENGTH | MODE
+                    b = self.readchar(1)
 
-                    # Bitmask and then shift to get the LENGTH (=size exponent) of the data
                     size = 2 ** ((b & 0b111000) >> 3)
 
-                    # Bitmask to get the mode number
-                    # TODO test if setting current mode is part of the protocol
                     wrt_mode = (b & 0b111) + ext_mode
 
-                    # Keep track of the checksum while reading data
                     ck = 0xFF ^ b
 
                     buf = bytearray(size)
                     for i in range(size):
-                        buf[i] = self.readchar()
-                        # Keep track of the checksum
+                        buf[i] = self.readchar(1)
                         ck ^= buf[i]
 
-                    if ck == self.readchar():
+                    if ck == self.readchar(1):
                         return buf, wrt_mode
                     else:
                         print(
@@ -387,11 +451,18 @@ class LPF2(object):
             else:
                 if self.debug:
                     buf = self.flush()
-                    print(f"Unhandled data from hub {hex(b)} {self.str_b(buf)}")
+                    extra = self.str_b(buf) if buf else ""
+                    print("unhandled rx", hex(b), extra)
+
+    @staticmethod
+    def str_b(b):
+        if not b:
+            return ""
+        return " ".join(hex(c) for c in b)
 
     def write(self, array):
-        if self.debug:
-            print("\n>> ", self.str_b(array))
+        if self.debug and self._debug_connect:
+            print("tx", self._tx_label(array))
         return self.uart.write(array)
 
     @staticmethod
@@ -472,7 +543,12 @@ class LPF2(object):
 
     def defineModes(self):
         n_modes = len(self.modes) - 1
-        n_views = [m[7] for m in self.modes].count(True) - 1
+        n_view_modes = sum(1 for m in self.modes if m[7])
+        if n_view_modes:
+            n_views = n_view_modes - 1
+        else:
+            n_views = n_modes
+        n_views = max(0, n_views)
         return self.addChksm(
             bytearray(
                 [
@@ -486,31 +562,72 @@ class LPF2(object):
         )
 
     def setupMode(self, mode, num):
-        self.load_payload(b"\x00" * mode[8], num)  # Store empty payload for this mode
+        self.load_payload(b"\x00" * mode[8], num)
         plus_8 = 0x00
         if num > 7:
             num -= 8
             plus_8 = MSG_INFO_PLUS8
-        self.write(self.str_info(mode[0], num, NAME | plus_8))  # write name
-        self.write(self.buildRange(mode[2], num, RAW | plus_8))  # write RAW range
-        self.write(self.buildRange(mode[3], num, PCT | plus_8))  # write Percent range
-        self.write(self.buildRange(mode[4], num, SI | plus_8))  # write SI range
-        self.write(self.str_info(mode[5], num, SYM | plus_8))  # write symbol
-        self.write(
-            self.buildFunctMap(mode[6], num, FUNCTION_MAP | plus_8)
-        )  # write Function Map
-        self.write(self.buildFormat(mode[1], num, FMT | plus_8))  # write format
+        self.write(self.str_info(mode[0], num, NAME | plus_8))
+        self.write(self.buildRange(mode[2], num, RAW | plus_8))
+        self.write(self.buildRange(mode[3], num, PCT | plus_8))
+        self.write(self.buildRange(mode[4], num, SI | plus_8))
+        self.write(self.str_info(mode[5], num, SYM | plus_8))
+        self.write(self.buildFunctMap(mode[6], num, FUNCTION_MAP | plus_8))
+        self.write(self.buildFormat(mode[1], num, FMT | plus_8))
 
-    # -----   Start everything up
+    def _send_info_sequence(self):
+        self.write(self.setType(self.sensor_id))
+        self.write(self.defineModes())
+        self.write(self.defineBaud(115200))
+        self.write(self.defineVers("0.1", __version__))
+        num = len(self.modes) - 1
+        for mode in reversed(self.modes):
+            utime.sleep_ms(MODE_GAP_MS)
+            self.setupMode(mode, num)
+            num -= 1
+        self.write(b"\x04")
+
+    def _wait_hub_ack(self, timeout_ms=CONNECT_ACK_MS):
+        t0 = utime.ticks_ms()
+        deadline = utime.ticks_add(t0, timeout_ms)
+        rx_hist = {}
+        while utime.ticks_diff(deadline, utime.ticks_ms()) > 0:
+            b = self.readchar(1)
+            if b < 0:
+                continue
+            if self.debug and self._debug_connect:
+                rx_hist[b] = rx_hist.get(b, 0) + 1
+            if b == BYTE_ACK:
+                self.connected = True
+                if self.debug and self._debug_connect:
+                    print(
+                        "connect: hub ACK after {}ms".format(
+                            utime.ticks_diff(utime.ticks_ms(), t0)
+                        )
+                    )
+                return True
+        if self.debug and self._debug_connect and rx_hist:
+            parts = []
+            for k in sorted(rx_hist.keys()):
+                parts.append("{}x {}".format(rx_hist[k], self._byte_label(k)))
+            print(
+                "connect: no ACK in {}ms ({})".format(
+                    timeout_ms, ", ".join(parts)
+                )
+            )
+        return False
 
     def connect(self):
         assert len(self.modes) > 0, "No modes (commands) defined"
-        fast_uart_hub = False
+        self.connected = False
+        self._debug_connect = self.debug
         self.init_pins()
-        self.wrt_tx_pin(1, 5)  # Say hello!
+        self.wrt_tx_pin(1, 5)
         self.wrt_tx_pin(0, 0)
         start = utime.ticks_ms()
-        for i in range(24):  # Wait for AOK
+        for i in range(24):
+            if utime.ticks_diff(utime.ticks_ms(), start) >= CONNECT_DCM_MS:
+                break
             n = 0
             while self.rx_pin.value() == 1:
                 utime.sleep_ms(1)
@@ -518,53 +635,22 @@ class LPF2(object):
                     break
                 n += 1
             if self.debug:
-                print(i, "falling after ms high:", n)
-            if i > 10 and (n > 21 or n < 16):
-                fast_uart_hub = True
-                if self.debug:
-                    print("Fast uart handshake after drops: ", i)
-                break
+                print("dcm drop {}: high {}ms".format(i, n))
             while self.rx_pin.value() == 0:
                 utime.sleep_ms(1)
-                # Wait until rise again
-        sync_elapsed = utime.ticks_ms()-start
+        sync_elapsed = utime.ticks_diff(utime.ticks_ms(), start)
         if self.debug:
-            print("Sync negotiation took", sync_elapsed)
-        if fast_uart_hub:
-            self.fast_uart()
-            utime.sleep_ms(6)
-            self.write(b"\x04")
-        else:
-            
-            if self.debug:
-                print("Slow uart sync")
-            self.slow_uart()
-            utime.sleep_ms( 450-sync_elapsed )
-            # self.write(b"\x00")
-        self.write(self.setType(self.sensor_id))
-        self.write(self.defineModes())  # tell how many modes
-        self.write(self.defineBaud(115200))
-        self.write(self.defineVers("0.1", __version__))
-        num = len(self.modes) - 1
-        for mode in reversed(self.modes):
-            utime.sleep_ms(20)
-            self.setupMode(mode, num)
-            num -= 1
-
-        self.write(b"\x04")  # ACK
-        end = utime.ticks_ms() + 2500
-        while utime.ticks_ms() < end:  # Wait for ack
-            data = self.readchar()
-            if data == BYTE_ACK:
-                self.connected = True
-                break
-
+            print("connect: dcm {}ms reg=slow@2400".format(sync_elapsed))
+        self.slow_uart()
+        remaining = CONNECT_DCM_MS - sync_elapsed
+        if remaining > 0:
+            utime.sleep_ms(remaining)
+        self._send_info_sequence()
+        self._wait_hub_ack()
+        self._debug_connect = False
         if self.connected:
             self.last_nack = utime.ticks_ms()
-            print("\nSuccessfully connected to hub with sensor id {}".format(self.sensor_id))
-            if not fast_uart_hub:
-                self.fast_uart()
+            print("connect: ok id={} data=fast@115200".format(self.sensor_id))
+            self.fast_uart()
         else:
-            print("\nFailed to connect to hub")
-
-
+            print("connect: failed id={} (slow@2400)".format(self.sensor_id))
