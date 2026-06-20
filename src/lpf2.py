@@ -654,5 +654,3 @@ class LPF2(object):
             self.fast_uart()
         else:
             print("connect: failed id={} (slow@2400)".format(self.sensor_id))
-
-    
