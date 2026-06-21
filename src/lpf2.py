@@ -2,7 +2,7 @@
 __author__ = "Anton Vanhoucke & Ste7an"
 __copyright__ = "Copyright 2023, 2024 AntonsMindstorms.com"
 __license__ = "GPL"
-__version__ = "2.1"
+__version__ = "2.6"
 __status__ = "Production"
 
 import machine
@@ -77,6 +77,12 @@ HEARTBEAT_PERIOD = const(1000)  # time of inactivity after which we reset sensor
 MODE_GAP_MS = const(20)  # delay between mode info blocks at 2400 during connect
 CONNECT_DCM_MS = const(450)  # total GPIO DCM window before registration
 CONNECT_ACK_MS = const(2500)
+# Fast connect: open UART by drop index, then poll (see measure_lpf2_timing.py).
+CONNECT_FAST_UART_DROP = const(19)  # after drop 19 low → listen on drop 20+
+CONNECT_CMD_SPEED_MS = const(150)  # poll window after UART open
+FAST_REG_GAP_MS = const(6)
+# Hub probe: CMD_Baud(115200) sent at 115200 baud (not 2400).
+HUB_CMD_SPEED = b"\x52\x00\xc2\x01\x00\x6e"
 
 
 def __num_bits(x):
@@ -94,6 +100,7 @@ class LPF2(object):
         modes,
         sensor_id=62,
         debug=False,
+        fast_connect=False,
         max_packet_size=MAX_PKT,
         rx=None,
         tx=None,
@@ -106,6 +113,9 @@ class LPF2(object):
         self.payloads = {}
         self.last_nack = 0
         self.debug = debug
+        # EXPERIMENTAL — see logic_analysis/NOTES.md. Slow @2400 connect works on
+        # LMS-ESP32 + Pybricks 4; fast_connect has not reliably caught hub CMD_SPEED.
+        self.fast_connect = fast_connect
         self.max_packet_size = max_packet_size
         self._debug_connect = False
         self.UART_N = uart_n
@@ -115,19 +125,19 @@ class LPF2(object):
             self.BOARD = OPENMVRT
             if uart_n == None:
                 self.UART_N = 1
-            print("OpenMV RT defaults loaded")
+            print("OpenMV RT defaults loaded, LPF2 v{}".format(__version__))
         elif "OPENMV4" in implementation[2]:
             self.BOARD = OPENMV
             import pyb
             self.pyb = pyb
             if uart_n == None:
                 self.UART_N = 3
-            print("OpenMV H7 defaults loaded")
+            print("OpenMV H7 defaults loaded, LPF2 v{}".format(__version__))
         elif "OpenMV-AE3" in implementation[2]:
             self.BOARD = OPENMVAE3
             if uart_n == None:
                 self.UART_N = 5
-            print("OpenMV AE3 defaults loaded")
+            print("OpenMV AE3 defaults loaded, LPF2 v{}".format(__version__))
         else:
             self.BOARD = ESP32
             try:
@@ -142,7 +152,9 @@ class LPF2(object):
             if uart_n == None:
                 self.UART_N = 2
             print(
-                "LMS-ESP32 defaults loaded, with rx={}, tx={}".format(self.RX_PIN_N, self.TX_PIN_N)
+                "LMS-ESP32 defaults loaded, rx={}, tx={}, LPF2 v{}".format(
+                    self.RX_PIN_N, self.TX_PIN_N, __version__
+                )
             )
 
     @staticmethod
@@ -617,14 +629,58 @@ class LPF2(object):
             )
         return False
 
-    def connect(self):
-        assert len(self.modes) > 0, "No modes (commands) defined"
-        self.connected = False
-        self._debug_connect = self.debug
-        self.init_pins()
-        self.wrt_tx_pin(1, 5)
-        self.wrt_tx_pin(0, 0)
-        start = utime.ticks_ms()
+    def _find_cmd_speed(self, buf):
+        if len(buf) < len(HUB_CMD_SPEED):
+            return -1
+        for off in range(len(buf) - len(HUB_CMD_SPEED) + 1):
+            if bytes(buf[off : off + len(HUB_CMD_SPEED)]) == HUB_CMD_SPEED:
+                return off
+        return -1
+
+    def _wait_hub_cmd_speed(self, timeout_ms=CONNECT_CMD_SPEED_MS):
+        """
+        Poll UART for hub CMD_SPEED (6 bytes @115200, ~0.5 ms on wire).
+        Uses bulk reads — a 1-byte-per-ms loop can miss the whole probe.
+        """
+        t0 = utime.ticks_ms()
+        deadline = utime.ticks_add(t0, timeout_ms)
+        buf = bytearray()
+        while utime.ticks_diff(deadline, utime.ticks_ms()) > 0:
+            n = self.uart.any()
+            if n:
+                chunk = self.uart.read(n)
+                if chunk:
+                    buf.extend(chunk)
+                    off = self._find_cmd_speed(buf)
+                    if off >= 0:
+                        if self.debug and self._debug_connect:
+                            print(
+                                "connect: CMD_SPEED @byte {} +{}ms".format(
+                                    off,
+                                    utime.ticks_diff(utime.ticks_ms(), t0),
+                                )
+                            )
+                        return True
+            else:
+                utime.sleep_ms(1)
+        if self.debug and self._debug_connect:
+            print(
+                "connect: no CMD_SPEED in {}ms ({} bytes)".format(
+                    timeout_ms, len(buf)
+                )
+            )
+            if buf:
+                print("connect: rx capture", self.str_b(buf[:48]))
+        return False
+
+    def _run_dcm_gpio(self, start, trunc_exit=False):
+        """
+        GPIO DCM on RX. UART must stay closed until trunc_exit cut-off.
+
+        Fast path: finish drops 0..CONNECT_FAST_UART_DROP (inclusive), then return
+        so the caller can open UART before later drops — avoids missing a ~0.5 ms
+        probe while still counting ms with utime.sleep_ms(1).
+        """
         for i in range(24):
             if utime.ticks_diff(utime.ticks_ms(), start) >= CONNECT_DCM_MS:
                 break
@@ -634,11 +690,72 @@ class LPF2(object):
                 if n > 20:
                     break
                 n += 1
+            elapsed = utime.ticks_diff(utime.ticks_ms(), start)
             if self.debug:
-                print("dcm drop {}: high {}ms".format(i, n))
+                print("dcm drop {}: high {}ms @{}ms".format(i, n, elapsed))
             while self.rx_pin.value() == 0:
                 utime.sleep_ms(1)
-        sync_elapsed = utime.ticks_diff(utime.ticks_ms(), start)
+            if trunc_exit and i >= CONNECT_FAST_UART_DROP:
+                elapsed = utime.ticks_diff(utime.ticks_ms(), start)
+                if self.debug:
+                    print(
+                        "connect: dcm listen from drop {} @{}ms".format(
+                            i + 1, elapsed
+                        )
+                    )
+                break
+        elapsed = utime.ticks_diff(utime.ticks_ms(), start)
+        return elapsed
+
+    def measure_fast_probe(self, uart_drop=CONNECT_FAST_UART_DROP, listen_ms=200):
+        """
+        Diagnostic: log DCM drops, open UART after drop uart_drop, capture raw RX.
+        Run once per plug-in; use to tune CONNECT_FAST_UART_DROP. Does not connect.
+        """
+        self.init_pins()
+        self.wrt_tx_pin(1, 5)
+        self.wrt_tx_pin(0, 0)
+        start = utime.ticks_ms()
+        drops = []
+        for i in range(24):
+            if utime.ticks_diff(utime.ticks_ms(), start) >= CONNECT_DCM_MS:
+                break
+            n = 0
+            while self.rx_pin.value() == 1:
+                utime.sleep_ms(1)
+                if n > 20:
+                    break
+                n += 1
+            elapsed = utime.ticks_diff(utime.ticks_ms(), start)
+            drops.append((i, n, elapsed))
+            print("drop {} high {}ms @{}ms".format(i, n, elapsed))
+            while self.rx_pin.value() == 0:
+                utime.sleep_ms(1)
+            if i >= uart_drop:
+                break
+        open_ms = utime.ticks_diff(utime.ticks_ms(), start)
+        print("uart open after drop {} @{}ms".format(uart_drop, open_ms))
+        self.fast_uart()
+        t0 = utime.ticks_ms()
+        buf = bytearray()
+        while utime.ticks_diff(utime.ticks_ms(), t0) < listen_ms:
+            n = self.uart.any()
+            if n:
+                buf.extend(self.uart.read(n))
+            else:
+                utime.sleep_ms(1)
+        off = self._find_cmd_speed(buf)
+        print("capture {} bytes in {}ms".format(len(buf), listen_ms))
+        if buf:
+            print("hex:", self.str_b(buf[:64]))
+        if off >= 0:
+            print("CMD_SPEED at byte", off, "ok")
+        else:
+            print("CMD_SPEED not found")
+        return drops, buf, off
+
+    def _connect_slow(self, sync_elapsed):
+        """Register at 2400 baud; hub falls back if the 115200 probe was missed."""
         if self.debug:
             print("connect: dcm {}ms reg=slow@2400".format(sync_elapsed))
         self.slow_uart()
@@ -647,10 +764,60 @@ class LPF2(object):
             utime.sleep_ms(remaining)
         self._send_info_sequence()
         self._wait_hub_ack()
+
+    def _connect_fast(self, sync_elapsed):
+        """
+        Open 115200 right after DCM GPIO, catch hub CMD_SPEED, ACK, register.
+        If CMD_SPEED is missed the probe already passed — do not spam registration.
+        """
+        if self.debug:
+            print("connect: dcm {}ms reg=fast@115200".format(sync_elapsed))
+        self.fast_uart()
+        if not self._wait_hub_cmd_speed():
+            if self.debug:
+                print("connect: CMD_SPEED not seen, abort fast path")
+            return
+        if self.debug:
+            print("connect: hub CMD_SPEED ok")
+        self.write(b"\x04")
+        utime.sleep_ms(FAST_REG_GAP_MS)
+        self._send_info_sequence()
+        self._wait_hub_ack()
+
+    def _connect_registration(self, use_fast_path):
+        """One connect attempt: GPIO hello + DCM, then fast or slow registration."""
+        self.connected = False
+        self.init_pins()
+        self.wrt_tx_pin(1, 5)
+        self.wrt_tx_pin(0, 0)
+        start = utime.ticks_ms()
+        sync_elapsed = self._run_dcm_gpio(start, trunc_exit=use_fast_path)
+        if use_fast_path:
+            self._connect_fast(sync_elapsed)
+        else:
+            self._connect_slow(sync_elapsed)
+
+    def connect(self):
+        assert len(self.modes) > 0, "No modes (commands) defined"
+        self._debug_connect = self.debug
+        tried_fast = False
+        connected_via_fast = False
+        if self.fast_connect:
+            tried_fast = True
+            self._connect_registration(use_fast_path=True)
+            connected_via_fast = self.connected
+        else:
+            self._connect_registration(use_fast_path=False)
+        if not self.connected and tried_fast:
+            if self.debug:
+                print("connect: fast failed, full retry slow@2400")
+            self.flush()
+            self._connect_registration(use_fast_path=False)
         self._debug_connect = False
         if self.connected:
             self.last_nack = utime.ticks_ms()
+            if not connected_via_fast:
+                self.fast_uart()
             print("connect: ok id={} data=fast@115200".format(self.sensor_id))
-            self.fast_uart()
         else:
-            print("connect: failed id={} (slow@2400)".format(self.sensor_id))
+            print("connect: failed id={}".format(self.sensor_id))
