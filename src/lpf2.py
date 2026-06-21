@@ -637,6 +637,20 @@ class LPF2(object):
                 return off
         return -1
 
+    @staticmethod
+    def _find_speed_115200_markers(buf):
+        """Interior of CMD_SPEED: 115200 as LE uint32 (0xc2, 0x01, 0x00)."""
+        marker = b"\xc2\x01\x00"
+        hits = []
+        off = 0
+        while off <= len(buf) - 3:
+            i = bytes(buf).find(marker, off)
+            if i < 0:
+                break
+            hits.append(i)
+            off = i + 1
+        return hits
+
     def _wait_hub_cmd_speed(self, timeout_ms=CONNECT_CMD_SPEED_MS):
         """
         Poll UART for hub CMD_SPEED (6 bytes @115200, ~0.5 ms on wire).
@@ -753,6 +767,98 @@ class LPF2(object):
         else:
             print("CMD_SPEED not found")
         return drops, buf, off
+
+    def listen_only_uart(self):
+        """115200 RX-only; sensor TX stays GPIO low (hub RX not idle-high). ESP32."""
+        if self.BOARD == ESP32:
+            self.tx_pin.init(machine.Pin.OUT, machine.Pin.PULL_DOWN)
+            self.tx_pin.value(0)
+            self.uart = machine.UART(
+                self.UART_N,
+                baudrate=115200,
+                rx=self.RX_PIN_N,
+                tx=-1,
+            )
+        else:
+            raise NotImplementedError("listen_only_uart: ESP32 only")
+
+    @staticmethod
+    def _hist_label(b):
+        if b == 0x00:
+            return "SYNC"
+        if b == 0xF0:
+            return "0xF0?"
+        if b == 0x52:
+            return "CMD_SPEED?"
+        return hex(b)
+
+    def experiment_rx_only_listen(self, listen_ms=CONNECT_DCM_MS):
+        """
+        Experiment: no GPIO DCM — RX-only UART from hello, TX held low.
+        Captures all bytes for listen_ms, histogram, CMD_SPEED search.
+        See tests/experiment_rx_only_listen.py and logic_analysis/NOTES.md
+        """
+        self.init_pins()
+        self.wrt_tx_pin(1, 5)
+        self.wrt_tx_pin(0, 0)
+        start = utime.ticks_ms()
+        self.listen_only_uart()
+        print("rx-only uart @115200, tx=gpio low, listen {}ms".format(listen_ms))
+        buf = bytearray()
+        hist = {}
+        first = {}
+        deadline = utime.ticks_add(start, listen_ms)
+        while utime.ticks_diff(deadline, utime.ticks_ms()) > 0:
+            n = self.uart.any()
+            if n:
+                chunk = self.uart.read(n)
+                if chunk:
+                    for b in chunk:
+                        t = utime.ticks_diff(utime.ticks_ms(), start)
+                        hist[b] = hist.get(b, 0) + 1
+                        if b not in first:
+                            first[b] = t
+                    buf.extend(chunk)
+            else:
+                utime.sleep_ms(1)
+        off = self._find_cmd_speed(buf)
+        markers = self._find_speed_115200_markers(buf)
+        print("total {} bytes in {}ms".format(len(buf), listen_ms))
+        if hist:
+            print("histogram (byte: count @first_ms):")
+            for b in sorted(hist.keys()):
+                print(
+                    "  {}: {} @{}ms".format(
+                        self._hist_label(b), hist[b], first[b]
+                    )
+                )
+        else:
+            print("histogram: (empty — hardware discarded framing errors?)")
+        print("0xF0 count:", hist.get(0xF0, 0), "(expect ~20 if 1:1 with DCM)")
+        print("0x00 count:", hist.get(0x00, 0))
+        if markers:
+            print("115200 marker 0xc2 0x01 0x00 at byte(s):", markers)
+            for m in markers[:3]:
+                lo = max(0, m - 2)
+                hi = min(len(buf), m + 6)
+                print("  context:", self.str_b(buf[lo:hi]))
+        if buf:
+            show = min(len(buf), 80)
+            print("hex[0:{}]:".format(show), self.str_b(buf[:show]))
+        if off >= 0:
+            print(
+                "CMD_SPEED exact match at byte",
+                off,
+                "first 0x52 @{}ms".format(first.get(0x52, "?")),
+            )
+        else:
+            print("CMD_SPEED exact match not found")
+            if markers:
+                print(
+                    "  (partial probe likely — UART mis-sync during DCM; "
+                    "see 0xc2 0x01 0x00 context above)"
+                )
+        return buf, hist, off
 
     def _connect_slow(self, sync_elapsed):
         """Register at 2400 baud; hub falls back if the 115200 probe was missed."""
