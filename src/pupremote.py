@@ -441,6 +441,7 @@ class PUPRemoteHub(PUPRemote):
                 assert (
                     len(argv) == num_args
                 ), "Expected {} argument(s) in call '{}'".format(num_args, mode_name)
+            self.pup_device.read(mode)
             payl = self.encode(size, self.commands[mode][FROM_HUB_FORMAT], *argv)
             self.pup_device.write(
                 mode, self._int8_to_uint8(tuple(payl + b"\x00" * (size - len(payl))))
@@ -491,6 +492,7 @@ class PUPRemoteHub(PUPRemote):
                 assert (
                     len(argv) == num_args
                 ), "Expected {} argument(s) in call '{}'".format(num_args, mode_name)
+            await self.pup_device.read(mode)
             payl = self.encode(size, self.commands[mode][FROM_HUB_FORMAT], *argv)
             await self.pup_device.write(
                 mode, self._int8_to_uint8(tuple(payl + b"\x00" * (size - len(payl))))

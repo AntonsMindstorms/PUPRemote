@@ -264,6 +264,7 @@ class PUPRemoteHub(PUPRemote):
                 assert (
                     len(argv) == num_args
                 ), "Expected {} argument(s) in call '{}'".format(num_args, mode_name)
+            self.pup_device.read(mode)
             payl = self.encode(size, self.commands[mode][FROM_HUB_FORMAT], *argv)
             self.pup_device.write(
                 mode,
@@ -316,6 +317,7 @@ class PUPRemoteHub(PUPRemote):
             num_args = self.commands[mode][ARGS_FROM_HUB]
             if num_args >= 0:
                 assert len(argv) == num_args, "Args mismatch in {}".format(mode_name)
+            await self.pup_device.read(mode)
             payl = self.encode(size, self.commands[mode][FROM_HUB_FORMAT], *argv)
             await self.pup_device.write(
                 mode,
