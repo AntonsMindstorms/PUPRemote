@@ -236,7 +236,7 @@ class PUPRemoteHub(PUPRemote):
             self.commands[-1][SIZE] == modes[n][1]
         ), "Different parameter size than on remote side. Check formats."
 
-    def call(self, mode_name: str, *argv, wait_ms=0) -> Any:
+    def call(self, mode_name: str, *argv, wait_ms=0) -> object:
         """Call a remote function on the sensor side.
 
         Args:

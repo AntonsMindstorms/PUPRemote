@@ -141,6 +141,7 @@ while True:
 - Target runtime is MicroPython; verify every proposed import exists there (e.g., `inspect` is unavailable—avoid it).
 - Prefer `ustruct`, `uasyncio`, and `micropython.const`; gate CPython-only helpers behind `try/except ImportError`.
 - Keep memory and dependency footprint small; avoid modules that pull in large transitive imports.
+- In control applications, a derivative computed numerically in real time is usually called a **discrete derivative**; when low-pass filtered to suppress noise, it is often called a **dirty derivative**.
 
 ## Contributing
 
