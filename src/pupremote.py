@@ -6,6 +6,7 @@ __status__ = "Production"
 
 try:
     from pybricks.iodevices import PUPDevice
+    from pybricks.parameters import Port
     from pybricks.tools import wait, run_task
     import ustruct as struct
 
@@ -376,8 +377,9 @@ class PUPRemoteHub(PUPRemote):
     side to the hub side using add_command() and add_channel().
 
     Args:
-        port: The port to which the PUPRemoteSensor is connected (e.g., Port.A).
-        max_packet_size: Set to 16 for Pybricks compatibility, defaults to 32.
+        port: The port to which the PUPRemoteSensor is connected. Use Port.A,
+            a string ('A') or a number (1 = Port.A).
+        max_packet_size: Maximum payload size in bytes, defaults to 16 for Pybricks compatibility.
     """
 
     def _int8_to_uint8(self, arr):
@@ -385,6 +387,11 @@ class PUPRemoteHub(PUPRemote):
 
     def __init__(self, port, max_packet_size=MAX_PKT):
         super().__init__(max_packet_size)
+        # Accept Port.A, 'A' or 1 (=Port.A)
+        if isinstance(port, str):
+            port = getattr(Port, port.upper())
+        elif isinstance(port, int):
+            port = getattr(Port, chr(64 + port))
         self.port = port
         try:
             self.pup_device = PUPDevice(port)

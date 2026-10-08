@@ -19,6 +19,7 @@ __status__ = "Production"
 
 import ustruct as struct
 from pybricks.iodevices import PUPDevice
+from pybricks.parameters import Port
 from pybricks.tools import wait, run_task
 from micropython import const
 
@@ -195,8 +196,9 @@ class PUPRemoteHub(PUPRemote):
     side to the hub side using add_command() and add_channel().
 
     Args:
-        port: The port to which the PUPRemoteSensor is connected (e.g., Port.A).
-        max_packet_size: Set to 16 for Pybricks compatibility, defaults to 32.
+        port: The port to which the PUPRemoteSensor is connected. Use Port.A,
+            a string ('A') or a number (1 = Port.A).
+        max_packet_size: Maximum payload size in bytes, defaults to 16 for Pybricks compatibility.
     """
 
     def _int8_to_uint8(self, arr):
@@ -204,12 +206,12 @@ class PUPRemoteHub(PUPRemote):
 
     def __init__(self, port, max_packet_size=MAX_PKT):
         super().__init__(max_packet_size)
+        # Accept Port.A, 'A' or 1 (=Port.A)
         if isinstance(port, str):
-            port = eval("Port." + port)
-        if isinstance(port, int):
-            port = eval("Port." + chr(64 + port))
-        else: 
-            self.port = port
+            port = getattr(Port, port.upper())
+        elif isinstance(port, int):
+            port = getattr(Port, chr(64 + port))
+        self.port = port
         try:
             self.pup_device = PUPDevice(port)
         except OSError:
@@ -237,7 +239,7 @@ class PUPRemoteHub(PUPRemote):
             self.commands[-1][SIZE] == modes[n][1]
         ), "Different parameter size than on remote side. Check formats."
 
-    def call(self, mode_name: str, *argv, wait_ms=0) -> Any:
+    def call(self, mode_name: str, *argv, wait_ms=0):
         """Call a remote function on the sensor side.
 
         Args:

@@ -111,15 +111,16 @@ while True:
 Place `src/pupremote_hub.py` on the hub and reference it:
 
 ```python
-# examples/openmv_simple/pybricks_spike.py
+from pybricks.parameters import Port
+from pybricks.tools import wait
 from pupremote_hub import PUPRemoteHub
 
-hub = PUPRemoteHub()
-hub.add_channel('demo', to_hub_fmt="b")
+pr = PUPRemoteHub(Port.A)  # 'A' or 1 also work
+pr.add_channel('cntr', to_hub_fmt="b")  # Same as on the sensor side
 
 while True:
-    hub.process()
-    hub.update_channel('demo', 1)
+    print(pr.call('cntr'))
+    wait(100)
 ```
 
 ## Compatibility Notes

@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 # Mock MicroPython modules that aren't available in CPython
 sys.modules["pybricks"] = MagicMock()
 sys.modules["pybricks.iodevices"] = MagicMock()
+sys.modules["pybricks.parameters"] = MagicMock()
 sys.modules["pybricks.tools"] = MagicMock()
 sys.modules["machine"] = MagicMock()
 sys.modules["lpf2"] = MagicMock()
@@ -339,6 +340,35 @@ class TestExampleIntegration(unittest.TestCase):
                 self.assertIsNotNone(content)
             except Exception as e:
                 self.fail(f"Failed to read example file {py_file}: {e}")
+
+
+class MockPort:
+    A, B, C, D, E, F = (object() for _ in range(6))
+
+
+class TestHubPortArgument(unittest.TestCase):
+    """PUPRemoteHub accepts Port.X, a port letter or a port number."""
+
+    def check_module(self, module):
+        from unittest.mock import patch
+
+        with patch.object(module, "Port", MockPort, create=True), patch.object(
+            module, "PUPDevice", MockPUPDevice
+        ):
+            for port in (MockPort.E, "E", "e", 5):
+                pr = module.PUPRemoteHub(port)
+                self.assertEqual(pr.port, MockPort.E)
+                self.assertEqual(pr.pup_device.port, MockPort.E)
+
+    def test_pupremote_hub(self):
+        import pupremote_hub
+
+        self.check_module(pupremote_hub)
+
+    def test_pupremote(self):
+        import pupremote
+
+        self.check_module(pupremote)
 
 
 if __name__ == "__main__":
