@@ -98,10 +98,19 @@ class TestSourceFileConsistency(unittest.TestCase):
         """Test that version is specified consistently."""
         src_dir = Path(__file__).parent.parent / "src"
 
-        version_pattern = r'__version__\s*=\s*"2\.1"'
+        import json
         import re
 
-        files_to_check = ["pupremote.py", "pupremote_hub.py"]
+        root = Path(__file__).parent.parent
+        version = re.search(
+            r'^version\s*=\s*"([^"]+)"', (root / "pyproject.toml").read_text(), re.M
+        ).group(1)
+        version_pattern = r'__version__\s*=\s*"{}"'.format(re.escape(version))
+
+        package_json = json.loads((root / "package.json").read_text())
+        self.assertEqual(package_json["version"], version, "package.json version")
+
+        files_to_check = ["pupremote.py", "pupremote_hub.py", "lpf2.py"]
 
         for filename in files_to_check:
             file_path = src_dir / filename

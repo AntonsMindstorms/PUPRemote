@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pupremote"
-version = "2.1.2"
+version = "2.1.3"
 description = "Emulate LEGO Powered Up sensors from MicroPython boards with RPC-style API"
 readme = "README.md"
 license = "GPL-3.0"

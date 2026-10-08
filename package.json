@@ -3,5 +3,5 @@
     ["lpf2.py", "github:antonvh/PUPRemote/src/lpf2.py"],
     ["pupremote.py","github:antonvh/PUPRemote/src/pupremote.py"]
   ],
-  "version": "1.0"
+  "version": "2.1.3"
 }

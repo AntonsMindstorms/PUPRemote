@@ -12,7 +12,7 @@ The PUPRemote repository has been comprehensively validated with:
 
 ### Code Quality
 - Syntax validation of all 4 source files (1,808 lines)
-- Version consistency (2.1 across all files)
+- Version consistency (`pyproject.toml` version across all files)
 - Docstring completeness and Google-style formatting
 - License and author attribution
 - Constants and encoding/decoding logic
@@ -110,7 +110,7 @@ python3 -m unittest discover tests -v > test_results.txt
 ## Next Steps
 
 1. Run tests regularly to catch regressions
-2. Keep version in sync across files (currently 2.1)
+2. Keep `__version__` in `pupremote.py`, `pupremote_hub.py`, `lpf2.py` and `package.json` in sync with `pyproject.toml`
 3. Maintain docstring formatting (Google style)
 4. Consider adding CI/CD pipeline for automated testing
 

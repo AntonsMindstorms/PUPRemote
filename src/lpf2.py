@@ -2,7 +2,7 @@
 __author__ = "Anton Vanhoucke & Ste7an"
 __copyright__ = "Copyright 2023, 2024 AntonsMindstorms.com"
 __license__ = "GPL"
-__version__ = "2.1"
+__version__ = "2.1.3"
 __status__ = "Production"
 
 import machine

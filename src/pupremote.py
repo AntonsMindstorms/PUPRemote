@@ -1,7 +1,7 @@
 __author__ = "Anton Vanhoucke & Ste7an"
 __copyright__ = "Copyright 2023,2024 AntonsMindstorms.com"
 __license__ = "GPL"
-__version__ = "2.1"
+__version__ = "2.1.3"
 __status__ = "Production"
 
 try:
@@ -438,6 +438,9 @@ class PUPRemoteHub(PUPRemote):
         assert (
             not run_task()
         ), "Use 'call_multitask' instead of 'call', with multiple start blocks or multitask blocks"
+        assert mode_name in self.modes, "Unknown command '{}'. Use add_command or add_channel first".format(
+            mode_name
+        )
 
         mode = self.modes[mode_name]
         size = self.commands[mode][SIZE]
@@ -478,6 +481,9 @@ class PUPRemoteHub(PUPRemote):
             raise AssertionError(
                 "Start 'process_async' as a seperate task (coroutine) before using 'call_multitask()'"
             )
+        assert command_name in self.modes, "Unknown command '{}'. Use add_command or add_channel first".format(
+            command_name
+        )
 
         result_holder = [False, None, None]  # [done, result, error]
         self._queue.append((command_name, argv, wait_ms, result_holder))

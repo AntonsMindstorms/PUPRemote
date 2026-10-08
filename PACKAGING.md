@@ -11,7 +11,7 @@ pip install -e .
 Or from a built wheel:
 
 ```bash
-pip install dist/pupremote-2.1.0-py3-none-any.whl
+pip install dist/pupremote-2.1.3-py3-none-any.whl
 ```
 
 ## Building Distributions

@@ -14,7 +14,7 @@
 __author__ = "Anton Vanhoucke & Ste7an"
 __copyright__ = "Copyright 2023,2024 AntonsMindstorms.com"
 __license__ = "GPL"
-__version__ = "2.1"
+__version__ = "2.1.3"
 __status__ = "Production"
 
 import ustruct as struct
@@ -41,6 +41,15 @@ CALLBACK = const(0)
 CHANNEL = const(1)
 
 
+pr = None
+
+
+def _connected():
+    if pr is None:
+        raise RuntimeError("Use the connect block first")
+    return pr
+
+
 def connect(port):
     """
     Connect to LMS-ESP32. Pass Port as a string ('A') or a number (1=Port.A)
@@ -50,45 +59,23 @@ def connect(port):
 
 
 def call(*args):
-    try:
-        return pr.call(*args)
-    except:
-        print("Use the connect & add_channel or add_command blocks before call")
-        raise
+    return _connected().call(*args)
 
 
 def add_channel(name, encoding):
-    try:
-        pr.add_channel(name, encoding)
-    except:
-        print("Use the connect command before adding a channel")
-        raise
+    _connected().add_channel(name, encoding)
 
 
 def add_command(name, to_hub="", from_hub=""):
-    try:
-        pr.add_command(name, to_hub_fmt=to_hub, from_hub_fmt=from_hub)
-    except:
-        print("Use the connect command before adding a command")
-        raise
+    _connected().add_command(name, to_hub_fmt=to_hub, from_hub_fmt=from_hub)
 
 
 def call_multitask(*args, **kwargs):
-    try:
-        return pr.call_multitask(*args, **kwargs)
-    except:
-        print(
-            "Use the connect & add_channel or add_command blocks before call_multitask"
-        )
-        raise
+    return _connected().call_multitask(*args, **kwargs)
 
 
 def process_async():
-    try:
-        return pr.process_async()
-    except:
-        print("Use the connect command before starting process_async")
-        raise
+    return _connected().process_async()
 
 
 class PUPRemote:
@@ -257,6 +244,9 @@ class PUPRemoteHub(PUPRemote):
         assert (
             not run_task()
         ), "Use 'call_multitask' instead of 'call', with multiple start blocks or multitask blocks"
+        assert mode_name in self.modes, "Unknown command '{}'. Use add_command or add_channel first".format(
+            mode_name
+        )
 
         mode = self.modes[mode_name]
         size = self.commands[mode][SIZE]
@@ -301,6 +291,9 @@ class PUPRemoteHub(PUPRemote):
             raise AssertionError(
                 "Start 'process_async' as a seperate task (coroutine) before using 'call_multitask()'"
             )
+        assert command_name in self.modes, "Unknown command '{}'. Use add_command or add_channel first".format(
+            command_name
+        )
 
         result_holder = [False, None, None]  # [done, result, error]
         self._queue.append((command_name, argv, wait_ms, result_holder))

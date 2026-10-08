@@ -49,6 +49,14 @@ class MockPUPDevice:
         self.data = data
 
 
+def project_version():
+    """Return the package version from pyproject.toml."""
+    import re
+
+    pyproject = (Path(__file__).parent.parent / "pyproject.toml").read_text()
+    return re.search(r'^version\s*=\s*"([^"]+)"', pyproject, re.M).group(1)
+
+
 class TestPUPRemoteBasics(unittest.TestCase):
     """Test basic PUPRemote functionality."""
 
@@ -78,8 +86,9 @@ class TestPUPRemoteBasics(unittest.TestCase):
         import pupremote
         import pupremote_hub
 
-        self.assertEqual(pupremote.__version__, "2.1")
-        self.assertEqual(pupremote_hub.__version__, "2.1")
+        version = project_version()
+        self.assertEqual(pupremote.__version__, version)
+        self.assertEqual(pupremote_hub.__version__, version)
 
     def test_constants_defined(self):
         """Test that required constants are defined."""
@@ -369,6 +378,48 @@ class TestHubPortArgument(unittest.TestCase):
         import pupremote
 
         self.check_module(pupremote)
+
+
+class TestHubBlockFunctions(unittest.TestCase):
+    """Module-level block functions in pupremote_hub report the real error."""
+
+    def setUp(self):
+        import pupremote_hub
+
+        self.hub = pupremote_hub
+        self.hub.pr = None
+
+    def tearDown(self):
+        self.hub.pr = None
+
+    def test_not_connected(self):
+        for func, args in (
+            (self.hub.call, ("x",)),
+            (self.hub.add_channel, ("x", "b")),
+            (self.hub.add_command, ("x",)),
+            (self.hub.process_async, ()),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "connect"):
+                func(*args)
+
+    def test_errors_pass_through(self):
+        from unittest.mock import patch
+
+        self.hub.pr = MagicMock()
+        self.hub.pr.add_command.side_effect = AssertionError("Different parameter size")
+        with patch("builtins.print") as mock_print:
+            with self.assertRaisesRegex(AssertionError, "Different parameter size"):
+                self.hub.add_command("x", "b")
+        mock_print.assert_not_called()
+
+    def test_unknown_command(self):
+        from unittest.mock import patch
+
+        with patch.object(self.hub, "PUPDevice", MockPUPDevice):
+            pr = self.hub.PUPRemoteHub(MockPort.A)
+        with patch.object(self.hub, "run_task", lambda: None):
+            with self.assertRaisesRegex(AssertionError, "Unknown command 'nope'"):
+                pr.call("nope")
 
 
 if __name__ == "__main__":
