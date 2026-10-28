@@ -169,7 +169,7 @@ class PUPRemote:
 
     def encode(self, size, format, *argv):
         if format == "repr":
-            s = bytes(repr(*argv), "UTF-8")
+            s = bytes(repr(*argv), "utf-8")
         else:
             s = struct.pack(format, *argv)
         assert len(s) <= size, "Payload exceeds maximum packet size"
